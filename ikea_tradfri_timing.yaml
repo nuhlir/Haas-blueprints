@@ -1,0 +1,133 @@
+blueprint:
+  source_url: https://github.com/metbril/home-assistant-blueprints/blob/main/automation/zha_ikea_tradfri_2button_onoff_brightness.yaml
+  name: "ZHA - IKEA TRADFRI - 2 Button Remote - On/Off and Brightness (Night Mode)"
+  description: IKEA TRADFRI 2 button remote with configurable night mode.
+  domain: automation
+
+  input:
+    remote:
+      name: IKEA TRADFRI remote control
+      selector:
+        device:
+          integration: zha
+          manufacturer: IKEA of Sweden
+          model: TRADFRI on/off switch
+
+    light:
+      name: Day light
+      description: Light used outside night hours
+      selector:
+        entity:
+          domain: light
+
+    night_light:
+      name: Night light
+      description: Light used during night hours
+      selector:
+        entity:
+          domain: light
+
+    night_start:
+      name: Night mode start
+      description: Time when night mode starts
+      selector:
+        time:
+      default: "20:00:00"
+
+    night_end:
+      name: Night mode end
+      description: Time when night mode ends
+      selector:
+        time:
+      default: "06:00:00"
+
+    speed:
+      name: Speed
+      selector:
+        number:
+          min: 100
+          max: 1000
+          step: 100
+          unit_of_measurement: milliseconds
+          mode: slider
+      default: 500
+
+mode: restart
+max_exceeded: silent
+
+variables:
+  var_speed: !input speed
+  transition_speed: "{{ (var_speed / 1000) | float }}"
+  day_light: !input light
+  night_light_var: !input night_light
+  night_start: !input night_start
+  night_end: !input night_end
+
+  is_night: >
+    {% set now_t = now().strftime('%H:%M:%S') %}
+    {% if night_start < night_end %}
+      {{ night_start <= now_t < night_end }}
+    {% else %}
+      {{ now_t >= night_start or now_t < night_end }}
+    {% endif %}
+
+trigger:
+  - platform: event
+    event_type: zha_event
+    event_data:
+      device_id: !input remote
+
+action:
+  - choose:
+
+      # === ON ===
+      - conditions: "{{ trigger.event.data.command == 'on' }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: >
+                {{ night_light_var if is_night else day_light }}
+            data:
+              transition: "{{ transition_speed }}"
+
+      # === BRIGHTNESS UP ===
+      - conditions: "{{ trigger.event.data.command == 'move_with_on_off' }}"
+        sequence:
+          - repeat:
+              while: []
+              sequence:
+                - service: light.turn_on
+                  target:
+                    entity_id: >
+                      {{ night_light_var if is_night else day_light }}
+                  data:
+                    brightness_step_pct: 10
+                    transition: "{{ transition_speed }}"
+                - delay:
+                    milliseconds: !input speed
+
+      # === OFF ===
+      - conditions: "{{ trigger.event.data.command == 'off' }}"
+        sequence:
+          - service: light.turn_off
+            target:
+              entity_id: >
+                {{ night_light_var if is_night else day_light }}
+            data:
+              transition: "{{ transition_speed }}"
+
+      # === BRIGHTNESS DOWN ===
+      - conditions: "{{ trigger.event.data.command == 'move' }}"
+        sequence:
+          - repeat:
+              while: []
+              sequence:
+                - service: light.turn_on
+                  target:
+                    entity_id: >
+                      {{ night_light_var if is_night else day_light }}
+                  data:
+                    brightness_step_pct: -10
+                    transition: "{{ transition_speed }}"
+                - delay:
+                    milliseconds: !input speed
